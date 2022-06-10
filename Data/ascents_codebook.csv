@@ -1,7 +1,0 @@
-variable,n,min,max,mean,item_text
-Climb,513,1,509,254.296296296296,the name of the route given by the person to complete the first ascent. Doesn't play a role in my analysis
-Ascents,513,1,1333,135.304093567252,the number of a ascents a route has received
-Grade,513,1,21,10.766081871345,the difficulty of the climb rated on the system described above
-Location,513,1,6,3.56530214424951,what crag the climb is located in around the world
-Type (B/L),513,1,2,1.5692007797271,signifies whether it is Bouldering (B) or Lead (L). This data was manipulated to be numeric
-Star Rating,513,1,5,3.43469785575049,the rating the climb has received from the community. Ranked from 1 (lowest) to 5 (highest)

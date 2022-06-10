@@ -1,0 +1,683 @@
+---
+title: "PSTAT 131 Final Project"
+author: "Finn Stack"
+date: '2022-06-01'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+  pdf_document: default
+---
+
+```{r setup, include=FALSE, warning=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+The purpose of this final project is to calculate the number of ascents an outdoor rock climb will receive based off of the difficulty (grade), location, type of climb, and it's star rating.
+
+The goal of outdoor rock climbing is to get up a rock or cliff face taking the most difficult path you're able to do. For the purpose of this project, I will call the path that someone takes to get up a rock or cliff face a climb. The difficulty of a route varies among everyone because of varying levels of skill, experience, and strength. While there isn't one specific criteria that makes one route harder than another, there are some factors that usually contribute to the difficulty and grade of the climb. These factors are mainly hold size, distance between holds, steepness of the rock, and length of the climb. Some climbs will have holds that are as small as 4mm, while others you can fit you whole hand on. There are times where you completely have to jump between the holds and have all four limbs leave the rock. Some routes will be completely vertical while others can be practically horizontal. Some routes will be 50 meters long, while others are only a few meters. 
+
+In this analysis, I will be addressing two types of climbing: Bouldering and Lead Climbing. Bouldering consists of shorter routes and you place crash pads to fall on. There is no rope or other equipment used. Lead climbing consists of much longer routes, where you need a rope to secure your safety. 
+
+![Lead vs. Bouldering](/Users/finnianstack/Desktop/School/PSTAT/PSTAT 131/Final Project/IMG_0904.jpg){width="400"}
+
+Each of these disciplines also has their own grading system for difficulty. The grading system for climbing is depicted as follows. From easiest to hardest: 6a, 6a+, 6b, 6b+, 6c, ..., 9a+, 9b, 9b+, 9c
+
+However, the Bouldering grade scale only goes up to 9a, while the lead scale goes up to 9c. This doesn't mean that one's harder than the other. There's just a slightly different scale for the two disciplines of rock climbing.
+
+Naturally, more people are able to do easier routes. Only a few people in the world have been able to climb 9a in Bouldering or 9c in Lead Climbing.
+
+# Why might this data be useful
+
+Having data on the amount of ascents a climb will receive that is being established for the first time could help areas understand how much traffic it will recieve as well as the impact on the nature around it.
+
+# Loading data and packages
+
+For my analysis, I am using data collected from *[8a.nu](https://www.8a.nu/crags/sportclimbing)*, a website where climbers all over the world can log their ascents. I have collected data from the most popular Bouldering and Lead areas.
+
+Areas: Magic Wood (Switzerland), Buttermilks (California), Rodellar (Spain), Ceuse (France), Chironico (Switzerland), Cuenca (Spain)
+
+Key variables in the data:  
+
+* `Climb` = the name of the route given by the person to complete the first ascent. Doesn't play a role in my analysis
+
+* `Ascents` = the number of a ascents a route has received
+
+* `Grade` = the difficulty of the climb rated on the system described above
+
+* `Location` = what crag the climb is located in around the world
+
+* `Type` = signifies whether it is Bouldering (B) or Lead (L). This data was manipulated to be numeric
+
+* `Star Rating` = the rating the climb has received from the community. Ranked from 1 (lowest) to 5 (highest)
+
+``` {r, include = FALSE}
+# load packages
+library(ranger)
+library(janitor)
+library(rpart.plot)
+library(ggplot2)
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(yardstick)
+library(corrr)
+library(pROC)
+library(glmnet)
+library(ggthemes)
+library(vip)
+library(xgboost)
+library(kknn)
+library(dplyr)
+library(knitr)
+library(lubridate, warn.conflicts = FALSE)
+tidymodels_prefer()
+
+
+# set seed (though not actually necessary for this RMD)
+set.seed(848)
+```
+
+
+
+``` {r, result = 'hide', error=FALSE,  warning=FALSE, quietly=T, message=FALSE}
+# Reading the data
+
+climb_ascents <- read_csv("/Users/finnianstack/Desktop/School/PSTAT/PSTAT 131/Final Project/8a.nu Climbs.csv")
+
+crag_summary <- read_csv("/Users/finnianstack/Desktop/School/PSTAT/PSTAT 131/Final Project/CRAGS SUMMARY.csv")
+
+ascents_numerical <- read_csv("/Users/finnianstack/Desktop/School/PSTAT/PSTAT 131/Final Project/8a.nu Climbs.csv")
+
+ascents_factor <-read_csv("/Users/finnianstack/Desktop/School/PSTAT/PSTAT 131/Final Project/8a.nu Climbs.csv")
+```
+
+# Data Cleaning
+
+```{r}
+climb_ascents <- climb_ascents %>%
+  clean_names()
+
+ascents_numerical <- ascents_numerical%>%
+  clean_names()
+
+ascents_factor <- ascents_factor %>%
+  clean_names()
+```
+
+I removed the variable `climb` which is the climb name from our data set because it isn't going to play a role in our analysis
+```{r}
+climb_ascents <- climb_ascents %>%
+ select(-climb)
+
+ascents_numerical <- ascents_numerical %>%
+ select(-climb)
+
+ascents_factor <- ascents_factor %>%
+ select(-climb)
+```
+
+Then, I turned the `type_b_l` variable into 1 = Bouldering and 0 = Lead
+```{r}
+climb_ascents$type_b_l <- ifelse(climb_ascents$type_b_l == "B", 1, 0)
+
+ascents_numerical$type_b_l <- ifelse(ascents_numerical$type_b_l == "B", 1, 0)
+
+```
+
+I also made all of the variables in my ascents_numerical dataset all numerical values.
+```{r}
+ascents_numerical$grade <- as.factor(ascents_numerical$grade)
+ascents_numerical$grade <- as.integer(ascents_numerical$grade)
+
+ascents_numerical$location <- as.factor(ascents_numerical$location)
+ascents_numerical$location <- as.numeric(ascents_numerical$location)
+
+```
+
+The final alteration I made while cleaning the data was making a dataset of all the variables as factors.
+
+
+```{r}
+ascents_factor$grade <- as.factor(ascents_factor$grade)
+ascents_factor$location <- as.factor(ascents_factor$location)
+ascents_factor$ascents <- as.factor(ascents_factor$ascents)
+ascents_factor$type_b_l <- as.factor(ascents_factor$type_b_l)
+ascents_factor$star_rating <- as.factor(ascents_factor$star_rating)
+```
+
+# Data Split
+
+Splitting the data into a testing set (80%) and a training set (20%) stratified around ascents.
+
+```{r, warning=FALSE}
+ascents_split <- climb_ascents %>%
+  initial_split(prop = 0.8, strata = "ascents")
+
+ascents_train <- training(ascents_split)
+ascents_test <- testing(ascents_split)
+
+
+ascents_split_numerical <- ascents_numerical %>%
+  initial_split(prop = 0.8, strata = "ascents")
+
+ascents_train_numerical <- training(ascents_split_numerical)
+ascents_test_numerical <- testing(ascents_split_numerical)
+
+ascents_split_factor <- ascents_factor %>%
+  initial_split(prop = 0.8, strata = "ascents")
+
+ascents_train_factor <- training(ascents_split_factor)
+ascents_test_factor <- testing(ascents_split_factor)
+
+```
+
+# Exploratory Data Analysis
+
+It appears that the data somewhat resembles a normal distribution, except the grade 7A appears to be a bit of an outlier. From experience, I would say that there are in general more easy climbs, but the those who climb easier grades generally don't log their ascents in 8a.nu. If we put aside the fact that many people don't log their easier ascents, there is a clear downward trend as the difficulty increases.
+```{r, fig.height = 5, fig.align = 'center'}
+
+ggplot(climb_ascents, aes(fill = location, x = grade)) +
+  geom_bar() +
+  labs(
+    title = "Total Number of Routes per Grade Across all Locations",
+    x = "Difficulty",
+    y = "Number of Climbs Logged at that Grade")
+
+```
+
+```{r, fig.height = 5, fig.align = 'center'}
+
+ggplot(climb_ascents, aes(fill = location, y = grade)) +
+  geom_bar() +
+  facet_wrap(~location) +
+  labs(
+    title = "Total Number of Routes per Grade",
+    y = "Difficulty",
+    x = "Number of Climbs Logged at that Grade")
+
+```
+
+
+For later in my analysis, where the route is located is going to play a big role. Thus, I have plotted the distribution of the difficulty level in the different areas below. 
+
+```{r, fig.align='center'}
+
+
+ggplot(crag_summary, aes(fill = Crag, y = Ascents, x = Type)) + 
+    geom_bar(position="dodge", stat="identity") +
+    ggtitle("Total Number of Ascents at Each Location") +
+    facet_wrap(~Crag) +
+    theme(legend.position = "none") +
+    xlab("Type") +
+  ylab("Number of Ascents")
+
+
+```
+From these barplots, we can see that each area is really known for either Bouldering or Lead. Not both. Thus, where a climb is located and the type of climbing, should play a large role. We can also clearly see that `Rodellar` has by far the most ascents across all grades.
+
+
+Looking at the barplots separated by location, it is much clearer that there is a negative correlation between the number of ascents and the grade of the route.
+```{r, fig.width = 9, fig.height=9, fig.align='center'}
+
+ggplot(climb_ascents, aes(fill = location, y = grade, x = ascents)) + 
+    geom_bar(position = "dodge", stat="identity") +
+    ggtitle("Total Number of Ascents at Each Location") +
+    facet_wrap(~location) +
+    theme(legend.position="none")
+
+
+```
+
+
+It appears that in all locations, more routes than any other have a 4 star rating, while very few have a 5 star rating.
+```{r, fig.height = 5, fig.align='center'}
+
+ggplot(climb_ascents, aes(fill = location, y = star_rating)) +
+  geom_bar() +
+  facet_wrap(~location) +
+  labs(
+    title = "Star Rating in Different Areas",
+    y = "Star Rating",
+    x = "Amount of Routes")
+
+```
+
+
+It's interesting to note how at more difficult grades, the median of the star rating is higher. I think this could be explained by the fact that since there are so few people who can climb the higher grades, when they choose to establish a route for the first time, they perceive it as a really good one. Also, since the star rating is based off of the average of all the people who have ascended it, there are far fewer people to rate it when the climb is very difficult.
+
+```{r, fig.width = 7,fig.height=8, fig.align='center'}
+ggplot(climb_ascents, aes(grade, star_rating)) +
+  geom_boxplot(varwidth = TRUE) +
+  facet_wrap(~location) +
+  coord_flip()
+```
+
+Converting the `grade` and `location` variables to nominal variables will allow us to analyze a correlation matrix. To do this, I used a fresh dataset (not the training or test data set because I don't need to change all of the variables to numeric for later analysis) and converted the variables to factors and then integers. This allowed for a complete correlation matrix with all the variables.
+
+```{r, fig.align='center'}
+ascents_numerical %>% 
+  select(where(is.numeric)) %>% 
+  cor(use = "complete.obs") %>% 
+  corrplot(method = "number", type = "lower")
+```
+From this, we can see that there is negligible correlation between the `type` of route it is (Bouldering or Lead) or `location` and the other variables. There is, however, a pretty good positive correlation between the `grade` of the climb and `star rating`. We can also see that there is a relatively inverse correlation between the amount of `ascents` and the `grade`, which is to be expected.
+
+# Model Building
+
+First, I will fold the data using vfold_csv. There will be 10 folds with 5 repeats, stratifying around ascents.
+
+```{r}
+
+ascents_fold <- vfold_cv(ascents_train, v = 10, repeats = 5, strata = ascents)
+
+ascents_fold_numerical <- vfold_cv(ascents_train_numerical, v = 10, repeats = 5, strata = ascents)
+
+```
+
+```{r, warning=FALSE}
+ascents_fold_factor <- vfold_cv(ascents_train_factor, v = 10, repeats = 5, strata = ascents)
+```
+
+Next, I will create a recipe with all of the variables. There will be 4 predictors `grade`, `location`, `type`, and `star rating`) with one outcome (`ascents`). Because of the nature of my dataset, I had to create a couple recipes. One being a recipe for all numerical values in the dataset. The other is a recipe for all factor values in the dataset. Having multiple recipes will come in handy when creating different regression models that require different `type` of variables. 
+
+```{r}
+ascents_recipe <- recipe(ascents ~ grade + location + type_b_l + star_rating, 
+                         data = ascents_train) %>%
+  step_dummy(all_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+ascents_recipe_numerical <- recipe(ascents ~ grade + location + type_b_l + star_rating, 
+                         data = ascents_train_numerical) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+ascents_recipe_factor <- recipe(ascents ~ grade + location + type_b_l + star_rating, 
+                         data = ascents_train_factor) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+```
+
+## Ridge Regression
+First, I will analyze a ridge regression and see how accurate it is in predicting the amount of ascents a climb will receive. To do this, I will utilize the numerical version of my dataset. To create this model, I will use the `glmnet` engine and the tune the penalty variable by setting it equal to `tune()`. 
+
+Here, I created the model and fit the regression to the entire training set.
+```{r}
+ridge_spec <- linear_reg(mixture = 0, penalty = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("glmnet")
+
+```
+
+In this model, I used `grid_regular` which allows me to create a grid of evenly spaced parameter values. From this, I will be able to see the optimal penalty value.
+
+```{r, warning = FALSE, results='hide', error=FALSE, message=FALSE}
+ridge_workflow <- workflow() %>%
+  add_recipe(ascents_recipe_numerical) %>%
+  add_model(ridge_spec)
+
+penalty_grid <- grid_regular(penalty(range = c(-5, 5)), levels = 50)
+penalty_grid
+
+tune_res <- tune_grid(
+  ridge_workflow,
+  resamples = ascents_fold_numerical,
+  grid = penalty_grid
+)
+```
+
+By using `autoplot()`, we are able to see a visualization of the `rmse` and `rsq` and the amount of regularization.
+
+```{r, message=FALSE, warning= FALSE, fig.align = 'center'}
+autoplot(tune_res)
+```
+  
+This graph shows us how the amount of regularization affects the performance performance metrics. It is interesting to note the relatively low levels of `rsq`, while there is a relatively high `rmse`. We can also see that the amount of regularization has no affect on the coefficient estimates.
+
+By using the `select_best()` function we are able to see that the best penalty for this model is $1e^{-5}$
+```{r}
+best_penalty <- select_best(tune_res, metric = "rsq")
+best_penalty
+```
+```{r}
+ridge_final <- finalize_workflow(ridge_workflow, best_penalty)
+
+ridge_final_fit <- fit(ridge_final, data = ascents_train_numerical)
+```
+
+By using `augment` and the test data, I am able to calculate the best estimate for this model which we can see below
+```{r}
+ridge_metric <- augment(ridge_final_fit, new_data = ascents_test_numerical) %>%
+  rmse(truth = ascents, estimate = .pred)
+ridge_metric
+```
+
+
+
+## Log Regression
+For the log regression model, I will be using the factor recipe I created above. To create this model, I used `logistic_reg()` and set the engine to `glm` and the mode to `classification`.
+
+```{r}
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+```
+
+After creating the `workflow()` function, I am able to fit the function to get the accuracy of this model.
+```{r, warning= FALSE}
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(ascents_recipe_factor)
+
+log_fit <- fit(log_wkflow, ascents_train_factor)
+```
+
+By using the `accuracy` function and setting the `truth = ascents`, we are able to see the accuracy of this model is about 3.4% which is quite low. 
+```{r}
+log_reg_acc <- augment(log_fit, new_data = ascents_train_factor) %>%
+  accuracy(truth = ascents, estimate = .pred_class)
+log_reg_acc
+```
+
+## Lasso Regression
+For the Lasso Regression, I am using my numerical data set and numerical recipe. To create the model I used `linear_reg()` and set `mixture = 1` in order to specify to the function that it's a Lasso model. Within the model, I used `glmnet` and set `penatly = tune()` which tells the model the `penalty` parameter must be tuned. This will allow us to determine the optimal `penalty` value fitting it to the folds.  
+
+The first step was fitting the model to the training set. Then, by using `grid_regular` I was able to set up a plot similar to the one created in the ridge model. This will allow us to visualize the `rmse` and `rsq` values against varrying amount of regularization.  
+```{r, message=FALSE, warning=FALSE}
+
+lasso_spec <- 
+  linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_mode("regression") %>% 
+  set_engine("glmnet") 
+
+lasso_workflow <- workflow() %>% 
+  add_recipe(ascents_recipe_numerical) %>% 
+  add_model(lasso_spec)
+
+penalty_grid_lasso <- grid_regular(penalty(range = c(-3, 1)), levels = 50)
+
+tune_res_lasso <- tune_grid(
+  lasso_workflow,
+  resamples = ascents_fold_numerical, 
+  grid = penalty_grid_lasso
+)
+```
+
+Then, in order to view this plot, I used `autoplot()` and achieved the graph below. 
+
+```{r, fig.align = 'center'}
+autoplot(tune_res_lasso)
+
+```
+
+Looking at this plot, it clearly resembles that of the Ridge Regression model with very similar `rmse` and `rsq` values. Again, we can notice the really high rmse values and there are ranges of regularization that have no affect on the coeeficient estimates
+
+We can also see that this function has the same best `penalty` value of $1e^{-5}$
+```{r}
+
+best_penalty_lasso <- select_best(tune_res, metric = "rsq")
+best_penalty_lasso
+```
+Then, I created a final fit for the Lassso model around the folded data set. Utilizing `augment()` I was able to use the test data to find the `estimate` value for this function which is about 0.203
+```{r}
+lasso_final <- finalize_workflow(lasso_workflow, best_penalty_lasso)
+
+lasso_final_fit <- fit(lasso_final, data = ascents_train_numerical)
+
+augment(lasso_final_fit, new_data = ascents_test_numerical) %>%
+  rmse(truth = ascents, estimate = .pred)
+
+augment(lasso_final_fit, new_data = ascents_test_numerical) %>%
+  rsq(truth = ascents, estimate = .pred)
+```
+Thus, we can see that there is a negligible difference in accuracy between the Ridge Regression model and the Lasso Regression model.
+
+## Random Forest Model
+
+The Next model I will utilize is the Random Forest model. To create this I used the `rand_forest()` while tuning the the arguments `trees`, `mtry` which refers to the number of nodes, and `min_n` which refers to the minimum number of nodes, by setting them all equal to `tune()`. I set the engine to `ranger` and the mode to `regression`.
+
+```{r}
+random_spec <- rand_forest(mtry = tune(), min_n = tune(), trees = tune()) %>%
+  set_engine("ranger", importance= "impurity") %>%
+  set_mode("regression")
+```
+
+Next, I created a workflow and fit the numerical data to the model. Using the `tune-grid()`, I was able to resample using the folded data. This allowed me to then use `autoplot()` to acquire a visualization of the `trees` with the `rsq` and `rmse`.
+```{r}
+random_wf <- workflow() %>%
+  add_recipe(ascents_recipe_numerical) %>%
+  add_model(random_spec)
+
+random_grid <- grid_regular(min_n(range = c(1, 3)), mtry(range = c(1, 3)), trees(range = c(1, 4)), levels = 3)
+
+tune_res_random = tune_grid(
+  random_wf,
+  resamples = ascents_fold_numerical,
+  grid = random_grid
+)
+
+
+autoplot(tune_res_random)
+```
+
+Then, using `collect_metrics()` I was able to view the highest mean in this model. 
+```{r}
+arrange(collect_metrics(tune_res_random), desc(mean))
+
+```
+In our case, the lowest rmse value corresponds to `mtry = 2`, `trees = 4`, and `min_n = 3`. Using these values and the `vip()` function, I fit a model to create a variable importance plot depicted below
+
+```{r, warning = FALSE}
+random_spec_fit <- rand_forest(mtry = 2, trees = 4, min_n = 3) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+random_fit <- fit(random_spec_fit, ascents ~ ., 
+                   data = ascents_train_numerical)
+
+vip(random_fit)
+```
+
+We can see that the most important variable in predicting the number of ascents is the `grade` of the climb. This is to be expected as the harder the route gets, the fewer people there are that do climb it. The second most important being location is also to be expected because as we saw in the EDA there are some `locations` that have far more ascents logged in general than other locations.
+
+## Boosted Trees Model
+
+The next model I will create is a Boosted Trees model. To set up this model, I used `boost_trees()` with the engine set to `xgboost` and the mode set to `regression`. Within the model I set the `trees`, `mtry`, and `min_n` equal to `tune()`, in order to tune the parameters. 
+
+```{r}
+boost_model <- boost_tree(min_n = tune(), mtry = tune(), trees = tune()) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+boost_wf <- workflow() %>%
+  add_recipe(ascents_recipe_numerical) %>%
+  add_model(boost_model)
+
+boost_grid <- grid_regular(min_n(range = c(1, 2)), mtry(range = c(1, 7)), trees(range = c(1, 4)), levels = 6)
+
+tune_res_boost <- tune_grid(
+  boost_wf,
+  resamples = ascents_fold_numerical,
+  grid = boost_grid
+)
+```
+
+Looking at the visual below we can see that it differs from the random forest model. The main difference is that when the number of trees increases, the `rmse` and `rsq` appear to decrease. In the Random Forest model, this was the inverse. 
+
+```{r}
+autoplot(tune_res_boost)
+```
+Using `collect_metrics()`, I am able to view the mean values and determine which one would be best to fit to the variable importance plot. In this case, it appears that the lowest rmse score corresponds to `mtry = 3`, `trees = 4`, and `min_n = 2`
+```{r}
+boosted_metrics <- arrange(collect_metrics(tune_res_boost), desc(mean))
+boosted_metrics
+```
+By creating a new function utilizing the parameters found in `collect_metrics()`, I am able to calculate the lowest `rmse` as well as view the variable importance plot.
+
+```{r}
+boost_spec <- boost_tree(trees = 4) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+boost_fit <- fit(boost_spec, ascents ~ ., data = ascents_train_numerical)
+
+augment(boost_fit, new_data = ascents_train_numerical) %>%
+  rmse(truth = ascents, estimate = .pred)
+```
+
+```{r}
+vip(boost_fit)
+```
+It's interesting to note that in the Boosted Trees model, the most important variable is location.
+
+```{r}
+augment(boost_fit, new_data = ascents_test_numerical) %>%
+  ggplot(aes(ascents, .pred)) +
+  geom_abline() +
+  geom_point(alpha = 0.5)
+```
+
+## K-Nearest Neighbor Model
+
+For the last model, I will be creating a K Nearest Neighbor Model. In order to set up this model, I used `nearest_neighbor()`, set `neighbors = tune()`, `mode = classfication`, and `set_engine = kknn`. 
+```{r, message=FALSE, warning=FALSE}
+k_nearest_model <- nearest_neighbor(
+  neighbors = tune(), 
+  mode = "classification") %>% 
+  set_engine("kknn")
+
+k_nearest_workflow <- workflow() %>% 
+  add_model(k_nearest_model) %>% 
+  add_recipe(ascents_recipe_factor)
+
+k_nearest_params <- extract_parameter_set_dials(k_nearest_model)
+
+k_grid <- grid_regular(k_nearest_params, levels = 9)
+
+tune_res_k_nearest <- tune_grid(k_nearest_workflow, resamples = ascents_fold_factor, grid = k_grid)
+
+# print an `autoplot()` of the result:
+autoplot(tune_res_k_nearest)
+         
+```
+Now, using `collect_metrics()` I am able to display the metrics in descending order based on their mean.
+
+```{r}
+k_nearest_metrics <- arrange(collect_metrics(tune_res_k_nearest), mean(desc))
+k_nearest_metrics
+```
+
+
+
+# Final Model Building
+
+For the final model, I will be using the Boosted Forest model as it had the best `rsq` value out of all of the model.
+
+```{r}
+final_fit <- select_best(tune_res_boost, metric = "rsq")
+boosted_tree_best <- finalize_workflow(boost_wf, final_fit)
+
+boosted_train_fit <- fit(boosted_tree_best, data = ascents_train_numerical)
+
+predict(boosted_train_fit, new_data = ascents_train_numerical, type = "numeric") %>%
+  bind_cols(ascents_train_numerical %>% select(ascents)) %>%
+  rsq(truth = ascents, estimate = .pred)
+
+```
+After creating the final model, I am going to fit it to the test data to see how accurate it is. 
+
+```{r}
+boosted_test <- fit(boosted_tree_best, data = ascents_test_numerical)
+
+predict(boosted_test, new_data = ascents_test_numerical, type = "numeric") %>%
+  bind_cols(ascents_test_numerical %>% select(ascents)) %>%
+  rsq(truth = ascents, estimate = .pred)
+```
+
+As we can see, the `rsq` value indicates a pretty good fit for our dataset.
+
+
+## Testing the Final Model
+
+Now, I am going to test a few values to see how it interprets the number of ascents. For this, I am going to set the `location = Rodellar` which is location 6 in my dataset, `grade = 8B` which corresponds to 14 in the numerical dataset, `type_b_l = 0` which corresponds to lead, and `star-rating = 4`.
+
+```{r}
+prediction <- data.frame(
+  grade = 14,
+  location = 6,
+  type_b_l = 0,
+  star_rating = 4
+)
+
+predict(boosted_train_fit, prediction)
+
+```
+This is a pretty good estimate for the amount of ascents a climb with that data would acquire. It's difficult to say what the correct answer was because there are multiple data points in this dataset that all have the same inputs. However, the climbs in the dataset with those characteristics had 241, 207, 157, 152, 127, and 121 in `location = Rodellar`. So, while this estimate is a little low given the number of ascents on climbs with that equivalent data, this isn't very surprising because, as we saw in the EDA, `Rodellar` has by far the most ascents in general. Thus it's not very surprising that it underestimated the number of 'ascents' for that 'location'.
+
+
+Now, I am going to test a prediction in a different `location`. This time, I am going to set `location = Ceuse` and keep the other variables the same as the prediction before.
+
+```{r}
+prediction <- data.frame(
+  grade = 14,
+  location = 2,
+  type_b_l = 0,
+  star_rating = 4
+)
+
+predict(boosted_train_fit, prediction)
+
+```
+
+This is a relatively good prediction. Again, the estimate is a little lower than the actual values. From the dataset the number of ascents on climbs with those properties are 255, 137, 113, 66, and 26. While this isn't perfect, it does give a good estimate as to how many ascents a climb would recieve.
+
+
+Now, in this prediction, I am going yo change the `type` of climbing to Bouldering and see how the model responds. For this I am going to set `grade = 7A` (which corresponds to 6), `location = Buttermilks` (corresponds to 1), `type = bouldering` (corresponds to 1), and `star rating = 3`.
+
+```{r}
+prediction <- data.frame(
+  grade = 6,
+  location = 1,
+  type_b_l = 1,
+  star_rating = 3
+)
+
+predict(boosted_train_fit, prediction)
+
+```
+
+This was pretty accurate as the only climb that fits these properties has 112 ascents.
+
+# Conclusion
+
+For this project, I used data collected from *[8a.nu](https://www.8a.nu/crags/sportclimbing)*, a platform for climbers to log their ascents and track their progress. This website has over 6 million logged ascents with over 100,000 members. Originally, I was planning on using all of the data on this platform, but after reaching out to the creator and their team, they said it would be too difficult and costly for them to acquire data across the entire website. However, I was able to acquire data from six of the most popular areas. 
+
+As I outlined in the introduction, there are two main disciplines (Lead and Bouldering) which I used as one of the predictors in my model. In the Exploratory Data Analysis, we were able to see that certain locations are primarily Bouldering or Lead, not both. This was useful in the model building and ultimately predicting the number of ascents. We were also able to see that there was an inverse relationship between grade and the number of ascents. This was to be expected. It was also interesting to note how `grade` and `star rating` had a positive correlation. I think this is because there are far fewer harder climbs in general. Since so many more people can establish easier grades for the first time, the field gets over saturated with climbs at lower `grades` and lower `star rating`. 
+
+After doing the exploratory analysis, I did the model building and was able to see that the best model for our prediction was the Boosted Trees model. In this section, we were able to see that the most important variable in predicting the number of ascents, was the 'location' which I did not expect, but it does make sense as some of the locations have far more ascents overall than others. 
+
+In the end, the model performed pretty well, but seemed to underestimate in the predictions. This project was extremely hard and took a large amount of time, but in the end it was extremely fulfilling to learn about and analyze something I care so passionatley about.
+
+The main reason, I believe, the predictions aren't super accurate is because of repeated predictors having different outcomes. For example, there were five climbs in Rodellar that had the same `type`, `grade`, and `star rating` each with varying number of ascents (241, 207, 157, 152, 127, and 121). This made it very difficult for the model to understand why one had far more ascents than the others. In reality, there are far more factors that influence the number of ascents a climb recieves. This could be amount of time required to get to the `location`, some climbs are definitely more "stiff" which means they are seemingly harder for their grade, or when in the year it is climbable. 
+
+If I were to do this project again, I would try to include more predictors such as time to get to the location and when the climb was first established.
+
+
+
+
+
+
+
+
